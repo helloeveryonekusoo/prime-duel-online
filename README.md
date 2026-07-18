@@ -24,7 +24,7 @@
 
 ## 公開
 
-GitHub Pages上でそのまま動作します。ルームの通信には[Trystero](https://trystero.dev/)を使用し、ゲームデータはWebRTCで端末間を直接送信します。ルームを閉じると対戦状態は破棄されます。
+GitHub Pages上でそのまま動作します。ルームの相手発見には[Trystero](https://trystero.dev/)のMQTT方式を使用し、ゲームデータはWebRTCで端末間を直接送信します。ルームを閉じると対戦状態は破棄されます。
 
 ## 構成
 
