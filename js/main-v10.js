@@ -7,14 +7,17 @@ import {
   endTurn,
   passTurn,
   applyPassDraw,
+  HAND_LIMIT,
+  handOverflowCount,
+  discardHandOverflow,
   shouldOfferPassDraw,
   validateAttack,
   clearSave,
-} from "./game.js?v=16-rematch";
+} from "./game.js?v=17-hand-limit";
 
 const MQTT_MODULE_URL = "https://esm.run/mqtt@5.15.2";
 const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
-const TOPIC_ROOT = "prime-duel-online/v16";
+const TOPIC_ROOT = "prime-duel-online/v17";
 const AUTO_TURN_DELAY = 1_500;
 const META_HEARTBEAT_INTERVAL = 15_000;
 const META_STALE_AFTER = 45_000;
@@ -25,6 +28,7 @@ const modalRoot = document.querySelector("#modal-root");
 let game = null;
 let selected = [];
 let order = [];
+let discardSelection = [];
 const openGraveyards = new Set();
 let myIndex = null;
 let roomCode = "";
@@ -77,7 +81,7 @@ function graveCardHtml(card) {
 
 function title() {
   app.innerHTML = `<section class="hero"><div class="hero-card">
-    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v16</p>
+    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v17</p>
     <h1>PRIME<br>DUEL</h1>
     <p class="sub">ルームコードでつながる、2人用オンラインカードゲーム。<br>対戦への参加だけでなく、進行中のゲームも観戦できます。</p>
     <div class="form-row">
@@ -135,6 +139,7 @@ async function connectToRoom(mode) {
   hostClientId = null;
   opponentClientId = null;
   joinSent = false;
+  discardSelection = [];
   openGraveyards.clear();
   hasConnectedOnce = false;
   networkState = "connecting";
@@ -363,7 +368,7 @@ function startHeartbeat() {
 }
 
 function receiveRematchReady(message) {
-  if (!game || game.phase !== PHASES.GAME_OVER) return;
+  if (!game || game.phase !== PHASES.GAME_OVER || nextOverflowPlayerIndex() >= 0) return;
   const readyIndex = message.role === "host" ? 0 : message.role === "player" ? 1 : null;
   if (readyIndex === null) return;
   if (isHost && (readyIndex !== 1 || message.senderId !== opponentClientId)) return;
@@ -380,7 +385,7 @@ function receiveRematchReady(message) {
 }
 
 function requestRematch() {
-  if (!game || game.phase !== PHASES.GAME_OVER || myIndex === null) return;
+  if (!game || game.phase !== PHASES.GAME_OVER || myIndex === null || nextOverflowPlayerIndex() >= 0) return;
   game.rematchReady ??= [false, false];
   if (game.rematchReady[myIndex]) return;
   game.rematchReady[myIndex] = true;
@@ -394,12 +399,13 @@ function requestRematch() {
 }
 
 function startRematch() {
-  if (!isHost || !game || game.phase !== PHASES.GAME_OVER) return;
+  if (!isHost || !game || game.phase !== PHASES.GAME_OVER || nextOverflowPlayerIndex() >= 0) return;
   const names = game.players.map((player) => player.name);
   game = createGame(names);
   startTurn(game);
   selected = [];
   order = [];
+  discardSelection = [];
   openGraveyards.clear();
   modalRoot.innerHTML = "";
   publishMeta("playing");
@@ -417,7 +423,7 @@ function receiveState(state) {
   selected = [];
   order = [];
   render();
-  if (shouldShowPassDraw()) passDrawModal();
+  handleMandatoryActions();
 }
 
 function sync() {
@@ -504,6 +510,7 @@ function rulesModal() {
       <div><b>防御とダメージ</b><p>手札1〜2枚の合計、または外部カードで防御します。攻撃値との差がダメージ枚数となり、残ったライフの小さい番号から順に手札へ移します。結果表示後は自動で次のターンへ進みます。</p></div>
       <div><b>カード効果</b><p>Aは使用枚数分ドロー、Bは攻撃値+1、Cは外部防御値-2です。</p></div>
       <div><b>パス</b><p>いつでもパスできます。次の自分のターンは通常ドローを行わず、代わりに山札上の2枚から1枚を選んで引きます。</p></div>
+      <div><b>手札上限</b><p>手札は13枚までです。14枚以上になった場合、13枚になるよう超過分を選んで墓地へ送ります。</p></div>
       <div><b>観戦</b><p>観戦者は両プレイヤーの手札を見られますが、ゲーム操作はできません。</p></div>
       <div><b>勝利</b><p>相手のライフカードをすべて手札へ移動させると勝利です。</p></div>
     </div>
@@ -534,12 +541,49 @@ function leaveNetwork() {
 function handoff(after) {
   after?.();
   sync();
+  handleMandatoryActions();
 }
 
 const operatorIndex = () => (game.phase === PHASES.DEFENSE ? 1 - game.active : game.active);
 const shouldShowPassDraw = () =>
   myRole !== "spectator" &&
   shouldOfferPassDraw(game, myIndex);
+const nextOverflowPlayerIndex = () => game?.players.findIndex((player) => handOverflowCount(player) > 0) ?? -1;
+
+function handleMandatoryActions() {
+  if (!game) return;
+  const overflowIndex = nextOverflowPlayerIndex();
+  if (overflowIndex >= 0) {
+    clearTimeout(autoTurnTimer);
+    autoTurnTimer = null;
+    if (myRole !== "spectator" && myIndex === overflowIndex) discardOverflowModal(overflowIndex);
+    return;
+  }
+  if (game.phase === PHASES.GAME_OVER) return;
+  if (shouldShowPassDraw()) {
+    passDrawModal();
+    return;
+  }
+  maybeScheduleAutomaticTurn();
+}
+
+function maybeScheduleAutomaticTurn() {
+  if (
+    autoTurnTimer ||
+    game?.phase !== PHASES.RESULT ||
+    myRole === "spectator" ||
+    myIndex !== 1 - game.active
+  ) return;
+  const resolvedTurn = game.turn;
+  autoTurnTimer = setTimeout(() => {
+    autoTurnTimer = null;
+    if (!game || game.phase !== PHASES.RESULT || game.turn !== resolvedTurn || nextOverflowPlayerIndex() >= 0) return;
+    endTurn(game);
+    render();
+    sync();
+    handleMandatoryActions();
+  }, AUTO_TURN_DELAY);
+}
 
 function playerPanel(player, index) {
   const active = index === operatorIndex();
@@ -658,6 +702,10 @@ function centerDisplay(validation) {
 }
 
 function actionControls(validation) {
+  const overflowIndex = nextOverflowPlayerIndex();
+  if (overflowIndex >= 0) {
+    return `<p class="hint hand-limit-wait">${esc(game.players[overflowIndex].name)}が手札を${HAND_LIMIT}枚に調整しています…</p>`;
+  }
   if (game.phase === PHASES.RESULT) {
     return `<div class="auto-turn"><span class="auto-turn-dot"></span><b>次のターンへ自動で進みます</b></div><p class="hint">ライフ移動: ${game.lastResult.moved.join(", ") || "なし"} ／ Aドロー: ${game.lastResult.drawn}枚</p>`;
   }
@@ -717,17 +765,7 @@ function finishDefense(method, cards = []) {
   selected = [];
   render();
   sync();
-  if (game.phase !== PHASES.RESULT) return;
-  const resolvedTurn = game.turn;
-  clearTimeout(autoTurnTimer);
-  autoTurnTimer = setTimeout(() => {
-    autoTurnTimer = null;
-    if (!game || game.phase !== PHASES.RESULT || game.turn !== resolvedTurn) return;
-    endTurn(game);
-    render();
-    sync();
-    if (shouldShowPassDraw()) passDrawModal();
-  }, AUTO_TURN_DELAY);
+  handleMandatoryActions();
 }
 
 function toggleCard(cardId) {
@@ -770,6 +808,53 @@ function flash(message) {
   modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal"><p class="error">${esc(message)}</p><button type="button" class="btn primary" data-close-modal>確認</button></div></div>`;
 }
 
+function discardOverflowModal(playerIndex) {
+  const player = game.players[playerIndex];
+  const required = handOverflowCount(player);
+  if (!required) {
+    discardSelection = [];
+    modalRoot.innerHTML = "";
+    handleMandatoryActions();
+    return;
+  }
+
+  const currentModal = modalRoot.querySelector("[data-discard-player]");
+  if (!currentModal || Number(currentModal.dataset.discardPlayer) !== playerIndex) discardSelection = [];
+  const validIds = new Set(player.hand.map((card) => card.id));
+  discardSelection = discardSelection.filter((id) => validIds.has(id)).slice(0, required);
+
+  modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal discard-modal" data-discard-player="${playerIndex}" role="dialog" aria-modal="true" aria-labelledby="discard-title">
+    <p class="eyebrow">HAND LIMIT</p><h2 id="discard-title">手札を${HAND_LIMIT}枚にする</h2>
+    <p class="sub">手札が${player.hand.length}枚あります。墓地へ送るカードを<b>${required}枚</b>選んでください。</p>
+    <div class="discard-counter">選択中 ${discardSelection.length} / ${required}枚</div>
+    <div class="choice-cards discard-cards">${player.hand.map((card) => cardHtml(card, { isSelected: discardSelection.includes(card.id) })).join("")}</div>
+    <button type="button" class="btn primary" id="confirm-discard" ${discardSelection.length !== required ? "disabled" : ""}>選んだカードを墓地へ送る</button>
+  </div></div>`;
+
+  modalRoot.querySelectorAll("[data-card]").forEach((element) => {
+    element.addEventListener("click", () => {
+      const cardId = element.dataset.card;
+      if (discardSelection.includes(cardId)) discardSelection = discardSelection.filter((id) => id !== cardId);
+      else if (discardSelection.length < required) discardSelection.push(cardId);
+      discardOverflowModal(playerIndex);
+    });
+  });
+
+  document.querySelector("#confirm-discard")?.addEventListener("click", () => {
+    const result = discardHandOverflow(game, playerIndex, discardSelection);
+    if (!result.ok) {
+      discardSelection = [];
+      discardOverflowModal(playerIndex);
+      return;
+    }
+    discardSelection = [];
+    modalRoot.innerHTML = "";
+    render();
+    sync();
+    handleMandatoryActions();
+  });
+}
+
 function passDrawModal() {
   const player = game.players[game.active];
   const choices = player.deck.slice(0, 2);
@@ -777,12 +862,14 @@ function passDrawModal() {
     player.hasPassDrawBonus = false;
     render();
     sync();
+    handleMandatoryActions();
     return;
   }
   if (choices.length === 1) {
     applyPassDraw(game, choices[0].id);
     render();
     sync();
+    handleMandatoryActions();
     return;
   }
   modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal">
@@ -796,6 +883,7 @@ function passDrawModal() {
       modalRoot.innerHTML = "";
       render();
       sync();
+      handleMandatoryActions();
     });
   });
 }
@@ -803,10 +891,13 @@ function passDrawModal() {
 function gameOver() {
   clearSave();
   const winner = game.players[game.winner];
+  const overflowIndex = nextOverflowPlayerIndex();
   const ready = game.rematchReady || [false, false];
   const myReady = myIndex !== null && ready[myIndex];
   const opponentReady = myIndex !== null && ready[1 - myIndex];
-  const rematchStatus = myRole === "spectator"
+  const rematchStatus = overflowIndex >= 0
+    ? `${esc(game.players[overflowIndex].name)}が手札を${HAND_LIMIT}枚に調整しています…`
+    : myRole === "spectator"
     ? "プレイヤーが再戦を選ぶと、同じルームで次の対戦が始まります。"
     : myReady
       ? opponentReady
@@ -820,7 +911,7 @@ function gameOver() {
     <p class="sub">相手のライフゾーンをすべて攻略しました。</p>
     <p class="hint rematch-status">${rematchStatus}</p>
     <div class="footer-actions">
-      ${myRole === "spectator" ? "" : `<button type="button" class="btn primary" id="rematch" ${myReady ? "disabled" : ""}>${myReady ? "再戦準備完了" : "同じ相手と再戦"}</button>`}
+      ${myRole === "spectator" || overflowIndex >= 0 ? "" : `<button type="button" class="btn primary" id="rematch" ${myReady ? "disabled" : ""}>${myReady ? "再戦準備完了" : "同じ相手と再戦"}</button>`}
       <button type="button" class="btn" id="back-title">タイトルへ</button>
     </div>
   </div></div>`;

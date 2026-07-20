@@ -6,6 +6,9 @@ export const makePlayer=(name,i)=>({id:`p${i}`,name,deck:makeDeck(i),hand:[],gra
 export const draw=(p,n=1)=>{for(let i=0;i<n&&p.deck.length;i++){const c=p.deck.shift();c.zone='hand';p.hand.push(c)}};
 export const numberFrom=cards=>Number(cards.map(c=>c.number).join(''));
 export const sumNumbers=cards=>cards.reduce((sum,c)=>sum+c.number,0);
+export const HAND_LIMIT=13;
+export const handOverflowCount=player=>Math.max(0,player.hand.length-HAND_LIMIT);
+export function discardHandOverflow(g,playerIndex,cardIds){const p=g.players[playerIndex],required=handOverflowCount(p),unique=[...new Set(cardIds)];if(!required)return{ok:false,message:'手札は上限以内です。'};if(unique.length!==required)return{ok:false,message:`墓地へ送るカードを${required}枚選んでください。`};const discarded=p.hand.filter(c=>unique.includes(c.id));if(discarded.length!==required)return{ok:false,message:'選択したカードを確認してください。'};p.hand=p.hand.filter(c=>!unique.includes(c.id));discarded.forEach(c=>{c.zone='grave';p.graveyard.push(c)});publicLog(g,`${p.name}は手札上限を超えたため${discarded.length}枚を墓地へ送りました。`);return{ok:true,discarded}}
 export const shouldOfferPassDraw=(g,playerIndex)=>playerIndex!=null&&g?.phase===PHASES.ATTACK&&g.active===playerIndex&&g.players[playerIndex]?.hasPassDrawBonus===true;
 export const getGroup=c=>c.number<=3?'LOW':c.number<=6?'MIDDLE':'HIGH';
 export function validateAttack(cards){if(!cards.length)return{isValid:false,message:'攻撃カードを1枚以上選んでください。'};if(cards.length>3)return{isValid:false,message:'攻撃に使えるカードは最大3枚です。'};const counts=cards.reduce((a,c)=>(a[getGroup(c)]++,a),{LOW:0,MIDDLE:0,HIGH:0});if(counts.HIGH>1)return{isValid:false,message:'7〜13のカードは1回の攻撃につき1枚までです。'};if(counts.MIDDLE>1)return{isValid:false,message:'4〜6のカードは1回の攻撃につき1枚までです。'};const n=sumNumbers(cards);if(!isPrime(n))return{isValid:false,message:`合計 ${n} は素数ではありません。`};return{isValid:true,message:`合計 ${n} で攻撃可能です。`,number:n}}
