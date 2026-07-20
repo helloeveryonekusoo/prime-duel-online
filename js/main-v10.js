@@ -77,7 +77,7 @@ function graveCardHtml(card) {
 
 function title() {
   app.innerHTML = `<section class="hero"><div class="hero-card">
-    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v14</p>
+    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v15</p>
     <h1>PRIME<br>DUEL</h1>
     <p class="sub">ルームコードでつながる、2人用オンラインカードゲーム。<br>対戦への参加だけでなく、進行中のゲームも観戦できます。</p>
     <div class="form-row">
