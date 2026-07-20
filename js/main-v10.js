@@ -9,11 +9,11 @@ import {
   applyPassDraw,
   validateAttack,
   clearSave,
-} from "./game.js?v=12-auto-turn";
+} from "./game.js?v=13-pass-draw";
 
 const MQTT_MODULE_URL = "https://esm.run/mqtt@5.15.2";
 const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
-const TOPIC_ROOT = "prime-duel-online/v12";
+const TOPIC_ROOT = "prime-duel-online/v13";
 const AUTO_TURN_DELAY = 1_500;
 const META_HEARTBEAT_INTERVAL = 15_000;
 const META_STALE_AFTER = 45_000;
@@ -71,7 +71,7 @@ function cardHtml(card, { isSelected = false, hidden = false, life = false } = {
 
 function title() {
   app.innerHTML = `<section class="hero"><div class="hero-card">
-    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v12</p>
+    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v13</p>
     <h1>PRIME<br>DUEL</h1>
     <p class="sub">ルームコードでつながる、2人用オンラインカードゲーム。<br>対戦への参加だけでなく、進行中のゲームも観戦できます。</p>
     <div class="form-row">
@@ -451,7 +451,7 @@ function rulesModal() {
       <div><b>攻撃</b><p>手札から1〜3枚を選び、数字の合計が素数なら攻撃できます。1〜3は枚数制限なし、4〜6と7〜13はそれぞれ1枚までです。</p></div>
       <div><b>防御とダメージ</b><p>手札1〜2枚の合計、または外部カードで防御します。攻撃値との差がダメージ枚数となり、残ったライフの小さい番号から順に手札へ移します。結果表示後は自動で次のターンへ進みます。</p></div>
       <div><b>カード効果</b><p>Aは使用枚数分ドロー、Bは攻撃値+1、Cは外部防御値-2です。</p></div>
-      <div><b>パス</b><p>いつでもパスできます。次の自分のターンに、山札上の2枚から1枚を選んで引きます。</p></div>
+      <div><b>パス</b><p>いつでもパスできます。次の自分のターンは通常ドローを行わず、代わりに山札上の2枚から1枚を選んで引きます。</p></div>
       <div><b>観戦</b><p>観戦者は両プレイヤーの手札を見られますが、ゲーム操作はできません。</p></div>
       <div><b>勝利</b><p>相手のライフカードをすべて手札へ移動させると勝利です。</p></div>
     </div>
@@ -717,7 +717,7 @@ function passDrawModal() {
     return;
   }
   modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal">
-    <p class="eyebrow">PASS DRAW BONUS</p><h2>山札の上から1枚を選ぶ</h2>
+    <p class="eyebrow">PASS SELECT DRAW</p><h2>通常ドローの代わりに1枚を選ぶ</h2>
     <p class="sub">選ばなかったカードは山札の一番下へ移動します。</p>
     <div class="choice-cards">${choices.map((card) => cardHtml(card)).join("")}</div>
   </div></div>`;
