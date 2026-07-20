@@ -13,11 +13,11 @@ import {
   shouldOfferPassDraw,
   validateAttack,
   clearSave,
-} from "./game.js?v=18-hidden-details";
+} from "./game.js?v=19-discard-button";
 
 const MQTT_MODULE_URL = "https://esm.run/mqtt@5.15.2";
 const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
-const TOPIC_ROOT = "prime-duel-online/v18";
+const TOPIC_ROOT = "prime-duel-online/v19";
 const AUTO_TURN_DELAY = 1_500;
 const META_HEARTBEAT_INTERVAL = 15_000;
 const META_STALE_AFTER = 45_000;
@@ -83,7 +83,7 @@ function graveCardHtml(card, { showType = true } = {}) {
 
 function title() {
   app.innerHTML = `<section class="hero"><div class="hero-card">
-    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v18</p>
+    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v19</p>
     <h1>PRIME<br>DUEL</h1>
     <p class="sub">ルームコードでつながる、2人用オンラインカードゲーム。<br>対戦への参加だけでなく、進行中のゲームも観戦できます。</p>
     <div class="form-row">
@@ -831,7 +831,7 @@ function discardOverflowModal(playerIndex) {
     <p class="sub">手札が${player.hand.length}枚あります。墓地へ送るカードを<b>${required}枚</b>選んでください。</p>
     <div class="discard-counter">選択中 ${discardSelection.length} / ${required}枚</div>
     <div class="choice-cards discard-cards">${player.hand.map((card) => cardHtml(card, { isSelected: discardSelection.includes(card.id) })).join("")}</div>
-    <button type="button" class="btn primary" id="confirm-discard" ${discardSelection.length !== required ? "disabled" : ""}>選んだカードを墓地へ送る</button>
+    <div class="discard-actions"><span aria-live="polite">${discardSelection.length === required ? "選択完了" : `あと${required - discardSelection.length}枚選択`}</span><button type="button" class="btn primary" id="confirm-discard" ${discardSelection.length !== required ? "disabled" : ""}>選んだ${required}枚を墓地へ送る</button></div>
   </div></div>`;
 
   modalRoot.querySelectorAll("[data-card]").forEach((element) => {
