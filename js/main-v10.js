@@ -7,13 +7,14 @@ import {
   endTurn,
   passTurn,
   applyPassDraw,
+  shouldOfferPassDraw,
   validateAttack,
   clearSave,
-} from "./game.js?v=13-pass-draw";
+} from "./game.js?v=14-ui-fixes";
 
 const MQTT_MODULE_URL = "https://esm.run/mqtt@5.15.2";
 const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
-const TOPIC_ROOT = "prime-duel-online/v13";
+const TOPIC_ROOT = "prime-duel-online/v14";
 const AUTO_TURN_DELAY = 1_500;
 const META_HEARTBEAT_INTERVAL = 15_000;
 const META_STALE_AFTER = 45_000;
@@ -24,6 +25,7 @@ const modalRoot = document.querySelector("#modal-root");
 let game = null;
 let selected = [];
 let order = [];
+const openGraveyards = new Set();
 let myIndex = null;
 let roomCode = "";
 let myName = "";
@@ -69,9 +71,13 @@ function cardHtml(card, { isSelected = false, hidden = false, life = false } = {
   </button>`;
 }
 
+function graveCardHtml(card) {
+  return `<span class="grave-card type-${String(card.type).toLowerCase()}" title="${card.number}${card.type}"><b>${card.number}</b><small>${card.type}</small></span>`;
+}
+
 function title() {
   app.innerHTML = `<section class="hero"><div class="hero-card">
-    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v13</p>
+    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v14</p>
     <h1>PRIME<br>DUEL</h1>
     <p class="sub">ルームコードでつながる、2人用オンラインカードゲーム。<br>対戦への参加だけでなく、進行中のゲームも観戦できます。</p>
     <div class="form-row">
@@ -129,6 +135,7 @@ async function connectToRoom(mode) {
   hostClientId = null;
   opponentClientId = null;
   joinSent = false;
+  openGraveyards.clear();
   hasConnectedOnce = false;
   networkState = "connecting";
 
@@ -360,13 +367,7 @@ function receiveState(state) {
   selected = [];
   order = [];
   render();
-  if (
-    myIndex !== null &&
-    operatorIndex() === myIndex &&
-    game.players[myIndex].hasPassDrawBonus
-  ) {
-    passDrawModal();
-  }
+  if (shouldShowPassDraw()) passDrawModal();
 }
 
 function sync() {
@@ -445,7 +446,8 @@ function connectionModal(message) {
 }
 
 function rulesModal() {
-  modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="rules-title">
+  modalRoot.innerHTML = `<div class="modal-backdrop rules-backdrop" data-dismissible><div class="modal rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-title">
+    <div class="rules-toolbar"><button type="button" class="btn" data-close-modal>← 戻る</button></div>
     <p class="eyebrow">HOW TO PLAY</p><h2 id="rules-title">3枚までの合計で素数攻撃</h2>
     <div class="rule-grid">
       <div><b>攻撃</b><p>手札から1〜3枚を選び、数字の合計が素数なら攻撃できます。1〜3は枚数制限なし、4〜6と7〜13はそれぞれ1枚までです。</p></div>
@@ -455,9 +457,9 @@ function rulesModal() {
       <div><b>観戦</b><p>観戦者は両プレイヤーの手札を見られますが、ゲーム操作はできません。</p></div>
       <div><b>勝利</b><p>相手のライフカードをすべて手札へ移動させると勝利です。</p></div>
     </div>
-    <button type="button" class="btn primary" data-close-modal>閉じる</button>
+    <button type="button" class="btn primary rules-bottom-back" data-close-modal>戻る</button>
   </div></div>`;
-  modalRoot.querySelector("[data-close-modal]")?.focus();
+  modalRoot.querySelector("[data-close-modal]")?.focus({ preventScroll: true });
 }
 
 function leaveNetwork() {
@@ -485,6 +487,9 @@ function handoff(after) {
 }
 
 const operatorIndex = () => (game.phase === PHASES.DEFENSE ? 1 - game.active : game.active);
+const shouldShowPassDraw = () =>
+  myRole !== "spectator" &&
+  shouldOfferPassDraw(game, myIndex);
 
 function playerPanel(player, index) {
   const active = index === operatorIndex();
@@ -499,6 +504,10 @@ function playerPanel(player, index) {
         .map((card) => cardHtml(card, { hidden: true }))
         .join("")}</div>`;
 
+  const graveyard = player.graveyard.length
+    ? player.graveyard.map(graveCardHtml).join("")
+    : '<span class="muted-small">墓地にカードはありません</span>';
+
   return `<section class="player ${active ? "active" : ""}">
     <h2>${esc(player.name)} ${active ? '<span class="badge">操作中</span>' : ""}</h2>
     <div class="stats">
@@ -508,6 +517,7 @@ function playerPanel(player, index) {
       <div class="stat"><strong>${player.lifeZone.length}</strong><span>残りライフ</span></div>
     </div>
     <div class="life">${player.lifeZone.map((card) => `<i>${card.number}</i>`).join("")}</div>
+    <details class="graveyard-view" data-graveyard="${index}" ${openGraveyards.has(index) ? "open" : ""}><summary>墓地を見る <span>${player.graveyard.length}枚</span></summary><div class="graveyard-cards">${graveyard}</div></details>
     ${hand}
   </section>`;
 }
@@ -544,6 +554,15 @@ function render() {
     </div>
   </div>`;
   bindGameControls();
+  document.querySelectorAll("[data-graveyard]").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      const index = Number(details.dataset.graveyard);
+      if (details.open) openGraveyards.add(index);
+      else openGraveyards.delete(index);
+    });
+  });
+  const log = document.querySelector(".log");
+  if (log) log.scrollTop = log.scrollHeight;
   if (game.phase === PHASES.GAME_OVER) gameOver();
 }
 
@@ -657,7 +676,7 @@ function finishDefense(method, cards = []) {
     endTurn(game);
     render();
     sync();
-    if (operatorIndex() === myIndex && game.players[myIndex].hasPassDrawBonus) passDrawModal();
+    if (shouldShowPassDraw()) passDrawModal();
   }, AUTO_TURN_DELAY);
 }
 
@@ -759,7 +778,7 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && modalRoot.children.length) modalRoot.innerHTML = "";
+  if (event.key === "Escape" && modalRoot.querySelector("[data-dismissible]")) modalRoot.innerHTML = "";
 });
 
 window.addEventListener("beforeunload", leaveNetwork);

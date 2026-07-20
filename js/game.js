@@ -6,6 +6,7 @@ export const makePlayer=(name,i)=>({id:`p${i}`,name,deck:makeDeck(i),hand:[],gra
 export const draw=(p,n=1)=>{for(let i=0;i<n&&p.deck.length;i++){const c=p.deck.shift();c.zone='hand';p.hand.push(c)}};
 export const numberFrom=cards=>Number(cards.map(c=>c.number).join(''));
 export const sumNumbers=cards=>cards.reduce((sum,c)=>sum+c.number,0);
+export const shouldOfferPassDraw=(g,playerIndex)=>playerIndex!=null&&g?.phase===PHASES.ATTACK&&g.active===playerIndex&&g.players[playerIndex]?.hasPassDrawBonus===true;
 export const getGroup=c=>c.number<=3?'LOW':c.number<=6?'MIDDLE':'HIGH';
 export function validateAttack(cards){if(!cards.length)return{isValid:false,message:'攻撃カードを1枚以上選んでください。'};if(cards.length>3)return{isValid:false,message:'攻撃に使えるカードは最大3枚です。'};const counts=cards.reduce((a,c)=>(a[getGroup(c)]++,a),{LOW:0,MIDDLE:0,HIGH:0});if(counts.HIGH>1)return{isValid:false,message:'7〜13のカードは1回の攻撃につき1枚までです。'};if(counts.MIDDLE>1)return{isValid:false,message:'4〜6のカードは1回の攻撃につき1枚までです。'};const n=sumNumbers(cards);if(!isPrime(n))return{isValid:false,message:`合計 ${n} は素数ではありません。`};return{isValid:true,message:`合計 ${n} で攻撃可能です。`,number:n}}
 export const createGame=(names)=>{const players=names.map(makePlayer);players.forEach(p=>draw(p,5));return{turn:1,phase:PHASES.ATTACK,active:Math.random()<.5?0:1,players,external:shuffle([11,11,11,12,12,12,13,13,13]),externalGrave:[],selected:[],attack:null,defense:null,logs:['ゲームを開始しました。'],winner:null,lastResult:null}};
