@@ -9,11 +9,11 @@ import {
   applyPassDraw,
   validateAttack,
   clearSave,
-} from "./game.js";
+} from "./game.js?v=11-life-count";
 
 const MQTT_MODULE_URL = "https://esm.run/mqtt@5.15.2";
 const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
-const TOPIC_ROOT = "prime-duel-online/v10";
+const TOPIC_ROOT = "prime-duel-online/v11";
 
 const app = document.querySelector("#app");
 const modalRoot = document.querySelector("#modal-root");
@@ -64,7 +64,7 @@ function cardHtml(card, { isSelected = false, hidden = false, life = false } = {
 
 function title() {
   app.innerHTML = `<section class="hero"><div class="hero-card">
-    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v10</p>
+    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v11</p>
     <h1>PRIME<br>DUEL</h1>
     <p class="sub">ルームコードでつながる、2人用オンラインカードゲーム。<br>対戦への参加だけでなく、進行中のゲームも観戦できます。</p>
     <div class="form-row">
@@ -397,7 +397,7 @@ function rulesModal() {
     <p class="eyebrow">HOW TO PLAY</p><h2 id="rules-title">3枚までの合計で素数攻撃</h2>
     <div class="rule-grid">
       <div><b>攻撃</b><p>手札から1〜3枚を選び、数字の合計が素数なら攻撃できます。1〜3は枚数制限なし、4〜6と7〜13はそれぞれ1枚までです。</p></div>
-      <div><b>防御</b><p>手札1〜2枚の数字を足した値、または共通の外部カードで防御します。防御値に素数の条件はありません。</p></div>
+      <div><b>防御とダメージ</b><p>手札1〜2枚の合計、または外部カードで防御します。攻撃値との差がダメージ枚数となり、残ったライフの小さい番号から順に手札へ移します。</p></div>
       <div><b>カード効果</b><p>Aは使用枚数分ドロー、Bは攻撃値+1、Cは外部防御値-2です。</p></div>
       <div><b>パス</b><p>いつでもパスできます。次の自分のターンに、山札上の2枚から1枚を選んで引きます。</p></div>
       <div><b>観戦</b><p>観戦者は両プレイヤーの手札を見られますが、ゲーム操作はできません。</p></div>
