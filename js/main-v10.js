@@ -9,11 +9,14 @@ import {
   applyPassDraw,
   validateAttack,
   clearSave,
-} from "./game.js?v=11-life-count";
+} from "./game.js?v=12-auto-turn";
 
 const MQTT_MODULE_URL = "https://esm.run/mqtt@5.15.2";
 const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
-const TOPIC_ROOT = "prime-duel-online/v11";
+const TOPIC_ROOT = "prime-duel-online/v12";
+const AUTO_TURN_DELAY = 1_500;
+const META_HEARTBEAT_INTERVAL = 15_000;
+const META_STALE_AFTER = 45_000;
 
 const app = document.querySelector("#app");
 const modalRoot = document.querySelector("#modal-root");
@@ -38,6 +41,10 @@ let metaTopic = "";
 let joinSent = false;
 let roomTimer = null;
 let reconnectTimer = null;
+let autoTurnTimer = null;
+let heartbeatTimer = null;
+let hasConnectedOnce = false;
+let networkState = "connecting";
 
 const esc = (value) =>
   String(value).replace(
@@ -64,7 +71,7 @@ function cardHtml(card, { isSelected = false, hidden = false, life = false } = {
 
 function title() {
   app.innerHTML = `<section class="hero"><div class="hero-card">
-    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v11</p>
+    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v12</p>
     <h1>PRIME<br>DUEL</h1>
     <p class="sub">ルームコードでつながる、2人用オンラインカードゲーム。<br>対戦への参加だけでなく、進行中のゲームも観戦できます。</p>
     <div class="form-row">
@@ -122,6 +129,8 @@ async function connectToRoom(mode) {
   hostClientId = null;
   opponentClientId = null;
   joinSent = false;
+  hasConnectedOnce = false;
+  networkState = "connecting";
 
   const baseTopic = `${TOPIC_ROOT}/${roomCode}`;
   eventTopic = `${baseTopic}/events`;
@@ -155,19 +164,33 @@ async function connectToRoom(mode) {
 
 function bindMqttEvents() {
   mqttClient.on("connect", () => {
+    const firstConnection = !hasConnectedOnce;
+    hasConnectedOnce = true;
     clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    setNetworkState("online");
     mqttClient.subscribe([metaTopic, stateTopic, eventTopic], { qos: 1 }, (error) => {
       if (error) {
         connectionModal("ルームの通信チャンネルを開けませんでした。少し待って再試行してください。");
         return;
       }
 
-      if (isHost) {
+      if (isHost && firstConnection) {
         clearRetainedRoom(() => {
           publishMeta("waiting");
+          startHeartbeat();
           waitingRoom("ルームを作成しました。相手の参加を待っています…");
         });
-      } else {
+      } else if (isHost) {
+        publishMeta(game ? "playing" : "waiting");
+        startHeartbeat();
+        if (game) {
+          render();
+          sync();
+        } else {
+          waitingRoom("通信を再接続しました。相手の参加を待っています…");
+        }
+      } else if (firstConnection) {
         waitingRoom(
           myRole === "spectator"
             ? "観戦するルームを探しています…"
@@ -179,6 +202,11 @@ function bindMqttEvents() {
             connectionModal("ルームが見つかりません。コードとホスト側の画面を確認してください。");
           }
         }, 20_000);
+      } else if (game) {
+        render();
+        sync();
+      } else {
+        waitingRoom("通信を再接続しました。ルームを確認しています…");
       }
     });
   });
@@ -203,6 +231,7 @@ function bindMqttEvents() {
   });
 
   mqttClient.on("reconnect", () => {
+    setNetworkState("reconnecting");
     setConnectionText("通信を再接続しています…");
     if (!reconnectTimer) {
       reconnectTimer = setTimeout(() => {
@@ -212,7 +241,10 @@ function bindMqttEvents() {
     }
   });
 
-  mqttClient.on("offline", () => setConnectionText("通信が一時的に切れました。再接続しています…"));
+  mqttClient.on("offline", () => {
+    setNetworkState("reconnecting");
+    setConnectionText("通信が一時的に切れました。再接続しています…");
+  });
   mqttClient.on("error", (error) => console.error("MQTT error", error));
 }
 
@@ -227,6 +259,7 @@ function clearRetainedRoom(done) {
 }
 
 function receiveMeta(message) {
+  if (!message.sentAt || Date.now() - message.sentAt > META_STALE_AFTER) return;
   hostClientId = message.hostId;
   clearTimeout(roomTimer);
   if (isHost || joinSent) return;
@@ -251,6 +284,10 @@ function receiveEvent(message) {
       return;
     }
     if (message.role !== "player") return;
+    if (message.senderId === opponentClientId) {
+      if (game) sync();
+      return;
+    }
     if (game || opponentClientId) {
       publishEvent({ type: "notice", targetId: message.senderId, notice: "room-full" });
       return;
@@ -308,8 +345,15 @@ function publishMeta(status) {
   );
 }
 
+function startHeartbeat() {
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = setInterval(() => publishMeta(game ? "playing" : "waiting"), META_HEARTBEAT_INTERVAL);
+}
+
 function receiveState(state) {
   if (!state?.players || !Array.isArray(state.players) || state.players.length !== 2) return;
+  clearTimeout(autoTurnTimer);
+  autoTurnTimer = null;
   clearTimeout(roomTimer);
   game = state;
   modalRoot.innerHTML = "";
@@ -378,6 +422,14 @@ function setConnectionText(message) {
   if (element) element.textContent = message;
 }
 
+function setNetworkState(state) {
+  networkState = state;
+  const element = document.querySelector("#network-state");
+  if (!element) return;
+  element.className = `badge network-status ${state}`;
+  element.textContent = state === "online" ? "● 接続済み" : state === "reconnecting" ? "● 再接続中" : "● 接続中";
+}
+
 function connectionModal(message) {
   clearTimeout(roomTimer);
   modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal">
@@ -397,7 +449,7 @@ function rulesModal() {
     <p class="eyebrow">HOW TO PLAY</p><h2 id="rules-title">3枚までの合計で素数攻撃</h2>
     <div class="rule-grid">
       <div><b>攻撃</b><p>手札から1〜3枚を選び、数字の合計が素数なら攻撃できます。1〜3は枚数制限なし、4〜6と7〜13はそれぞれ1枚までです。</p></div>
-      <div><b>防御とダメージ</b><p>手札1〜2枚の合計、または外部カードで防御します。攻撃値との差がダメージ枚数となり、残ったライフの小さい番号から順に手札へ移します。</p></div>
+      <div><b>防御とダメージ</b><p>手札1〜2枚の合計、または外部カードで防御します。攻撃値との差がダメージ枚数となり、残ったライフの小さい番号から順に手札へ移します。結果表示後は自動で次のターンへ進みます。</p></div>
       <div><b>カード効果</b><p>Aは使用枚数分ドロー、Bは攻撃値+1、Cは外部防御値-2です。</p></div>
       <div><b>パス</b><p>いつでもパスできます。次の自分のターンに、山札上の2枚から1枚を選んで引きます。</p></div>
       <div><b>観戦</b><p>観戦者は両プレイヤーの手札を見られますが、ゲーム操作はできません。</p></div>
@@ -411,6 +463,10 @@ function rulesModal() {
 function leaveNetwork() {
   clearTimeout(roomTimer);
   clearTimeout(reconnectTimer);
+  clearTimeout(autoTurnTimer);
+  clearInterval(heartbeatTimer);
+  autoTurnTimer = null;
+  heartbeatTimer = null;
   if (!mqttClient) return;
   if (mqttClient.connected) {
     publishEvent({ type: "leave" });
@@ -419,7 +475,7 @@ function leaveNetwork() {
       mqttClient.publish(stateTopic, "", { qos: 1, retain: true });
     }
   }
-  mqttClient.end(true);
+  mqttClient.end(false);
   mqttClient = null;
 }
 
@@ -463,10 +519,15 @@ function render() {
   }
   const actingPlayer = game.players[operatorIndex()];
   const validation = game.phase === PHASES.ATTACK ? validateAttack(order) : null;
+  const networkLabel = networkState === "online" ? "● 接続済み" : networkState === "reconnecting" ? "● 再接続中" : "● 接続中";
+  const externalTotal = game.external.length + game.externalGrave.length;
+  const usedExternal = game.externalGrave.length
+    ? game.externalGrave.map((number) => `<i>${number}</i>`).join("")
+    : '<span class="muted-small">なし</span>';
   app.innerHTML = `<div class="shell">
     <header class="topbar">
       <div class="brand">PRIME <b>DUEL</b></div>
-      <div><span class="badge">ROOM ${roomCode}</span> ${myRole === "spectator" ? '<span class="badge">観戦中</span>' : ""} <span class="badge turn">TURN ${game.turn}</span> <span class="badge">${phaseName()}</span> <span class="badge">外部ゾーン ${game.external.length}</span></div>
+      <div class="status-group"><span class="badge">ROOM ${roomCode}</span> ${myRole === "spectator" ? '<span class="badge">観戦中</span>' : ""} <span class="badge turn">TURN ${game.turn}</span> <span class="badge">${phaseName()}</span> <span id="network-state" class="badge network-status ${networkState}">${networkLabel}</span></div>
       <button type="button" class="btn" data-open-rules>ルール</button>
     </header>
     <div class="grid">
@@ -474,6 +535,7 @@ function render() {
       <section class="panel board-center">
         <p class="eyebrow">${esc(actingPlayer.name)}'S ACTION</p><h2>${instruction()}</h2>
         <div class="prime-display">${centerDisplay(validation)}</div>
+        <div class="zone-summary"><div><span>外部ゾーン</span><strong>${game.external.length} / ${externalTotal}</strong></div><div><span>使用済み</span><span class="used-external">${usedExternal}</span></div></div>
         ${actionControls(validation)}
         <h3>ゲームログ</h3><div class="log">${game.logs.map((entry) => `<div>${esc(entry)}</div>`).join("")}</div>
         <div class="footer-actions"><button type="button" class="btn danger" id="restart">ルーム退出</button></div>
@@ -512,15 +574,24 @@ function centerDisplay(validation) {
     return `<div><div class="prime-number">${total || "—"}</div><div class="equation">${formula}</div><div class="equation">${validation?.message || "カードを1〜3枚選択してください"}</div></div>`;
   }
   if (game.phase === PHASES.DEFENSE) {
-    return `<div><div class="prime-number">${game.attack.value}</div><div class="equation">基本 ${game.attack.base} + B効果 ${game.attack.bCount}</div></div>`;
+    const defender = game.players[1 - game.active];
+    const defenseCards = defender.hand.filter((card) => selected.includes(card.id));
+    const defenseValue = defenseCards.reduce((sum, card) => sum + card.number, 0);
+    const preview = defenseCards.length
+      ? `<div class="equation defense-preview">防御候補 ${defenseCards.map((card) => card.number).join(" + ")} = ${defenseValue} ／ 予想ダメージ ${Math.max(0, game.attack.value - defenseValue)}</div>`
+      : '<div class="equation">防御カードを1〜2枚選ぶか、外部ゾーンを使います</div>';
+    return `<div><div class="prime-number">${game.attack.value}</div><div class="equation">攻撃：基本 ${game.attack.base} + B効果 ${game.attack.bCount}</div>${preview}</div>`;
   }
   if (game.lastResult) {
-    return `<div><div class="prime-number">${game.lastResult.damage}</div><div class="equation">攻撃 ${game.lastResult.attack} − 防御 ${game.lastResult.defense}</div></div>`;
+    return `<div><div class="prime-number">${game.lastResult.damage}</div><div class="equation">攻撃 ${game.lastResult.attack} − 防御 ${game.lastResult.defense}</div><div class="equation result-moved">ライフ移動：${game.lastResult.moved.join(", ") || "なし"}</div></div>`;
   }
   return "";
 }
 
 function actionControls(validation) {
+  if (game.phase === PHASES.RESULT) {
+    return `<div class="auto-turn"><span class="auto-turn-dot"></span><b>次のターンへ自動で進みます</b></div><p class="hint">ライフ移動: ${game.lastResult.moved.join(", ") || "なし"} ／ Aドロー: ${game.lastResult.drawn}枚</p>`;
+  }
   if (myRole === "spectator") {
     return `<p class="hint">観戦中です。${esc(game.players[operatorIndex()].name)}の操作を表示しています。</p>`;
   }
@@ -531,10 +602,11 @@ function actionControls(validation) {
     return `<div class="actions"><button type="button" class="btn primary" id="attack" ${!validation?.isValid ? "disabled" : ""}>攻撃確定</button><button type="button" class="btn gold" id="pass">パス</button></div>${validation && !validation.isValid && order.length ? `<p class="error">${esc(validation.message)}</p>` : ""}`;
   }
   if (game.phase === PHASES.DEFENSE) {
-    return `<div class="actions"><button type="button" class="btn primary" id="defend-hand" ${selected.length < 1 || selected.length > 2 ? "disabled" : ""}>手札で防御</button><button type="button" class="btn gold" id="defend-ext" ${!game.external.length ? "disabled" : ""}>外部ゾーン</button></div><p class="hint">手札防御は1〜2枚の数字を合計します。素数である必要はありません。外部ゾーンは一番上の1枚を使います。</p>`;
-  }
-  if (game.phase === PHASES.RESULT) {
-    return `<div class="actions"><button type="button" class="btn primary" id="next">次のターンへ</button></div><p class="hint">ライフ移動: ${game.lastResult.moved.join(", ") || "なし"} ／ Aドロー: ${game.lastResult.drawn}枚</p>`;
+    const defender = game.players[1 - game.active];
+    const defenseValue = defender.hand
+      .filter((card) => selected.includes(card.id))
+      .reduce((sum, card) => sum + card.number, 0);
+    return `<div class="actions"><button type="button" class="btn primary" id="defend-hand" ${selected.length < 1 || selected.length > 2 ? "disabled" : ""}>手札で防御${selected.length ? `（合計 ${defenseValue}）` : ""}</button><button type="button" class="btn gold" id="defend-ext" ${!game.external.length ? "disabled" : ""}>外部カードを使う</button></div><p class="hint">手札防御は1〜2枚の合計です。外部ゾーンは山の一番上から1枚を使い、使用後に数字が公開されます。</p>`;
   }
   return "";
 }
@@ -564,21 +636,29 @@ function bindGameControls() {
   });
   document.querySelector("#defend-hand")?.addEventListener("click", () => {
     const cards = game.players[1 - game.active].hand.filter((card) => selected.includes(card.id));
-    resolveDefense(game, "hand", cards);
-    selected = [];
-    render();
-    sync();
+    finishDefense("hand", cards);
   });
   document.querySelector("#defend-ext")?.addEventListener("click", () => {
-    resolveDefense(game, "external");
-    selected = [];
+    finishDefense("external");
+  });
+}
+
+function finishDefense(method, cards = []) {
+  resolveDefense(game, method, cards);
+  selected = [];
+  render();
+  sync();
+  if (game.phase !== PHASES.RESULT) return;
+  const resolvedTurn = game.turn;
+  clearTimeout(autoTurnTimer);
+  autoTurnTimer = setTimeout(() => {
+    autoTurnTimer = null;
+    if (!game || game.phase !== PHASES.RESULT || game.turn !== resolvedTurn) return;
+    endTurn(game);
     render();
     sync();
-  });
-  document.querySelector("#next")?.addEventListener("click", () => {
-    endTurn(game);
-    handoff(render);
-  });
+    if (operatorIndex() === myIndex && game.players[myIndex].hasPassDrawBonus) passDrawModal();
+  }, AUTO_TURN_DELAY);
 }
 
 function toggleCard(cardId) {
