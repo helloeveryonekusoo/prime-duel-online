@@ -13,11 +13,11 @@ import {
   shouldOfferPassDraw,
   validateAttack,
   clearSave,
-} from "./game.js?v=17-hand-limit";
+} from "./game.js?v=18-hidden-details";
 
 const MQTT_MODULE_URL = "https://esm.run/mqtt@5.15.2";
 const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
-const TOPIC_ROOT = "prime-duel-online/v17";
+const TOPIC_ROOT = "prime-duel-online/v18";
 const AUTO_TURN_DELAY = 1_500;
 const META_HEARTBEAT_INTERVAL = 15_000;
 const META_STALE_AFTER = 45_000;
@@ -75,13 +75,15 @@ function cardHtml(card, { isSelected = false, hidden = false, life = false } = {
   </button>`;
 }
 
-function graveCardHtml(card) {
-  return `<span class="grave-card type-${String(card.type).toLowerCase()}" title="${card.number}${card.type}"><b>${card.number}</b><small>${card.type}</small></span>`;
+function graveCardHtml(card, { showType = true } = {}) {
+  const typeClass = showType ? `type-${String(card.type).toLowerCase()}` : "type-hidden";
+  const title = showType ? `${card.number}${card.type}` : String(card.number);
+  return `<span class="grave-card ${typeClass}" title="${title}"><b>${card.number}</b>${showType ? `<small>${card.type}</small>` : ""}</span>`;
 }
 
 function title() {
   app.innerHTML = `<section class="hero"><div class="hero-card">
-    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v17</p>
+    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v18</p>
     <h1>PRIME<br>DUEL</h1>
     <p class="sub">ルームコードでつながる、2人用オンラインカードゲーム。<br>対戦への参加だけでなく、進行中のゲームも観戦できます。</p>
     <div class="form-row">
@@ -598,8 +600,9 @@ function playerPanel(player, index) {
         .map((card) => cardHtml(card, { hidden: true }))
         .join("")}</div>`;
 
+  const showGraveTypes = myRole === "spectator" || index === myIndex;
   const graveyard = player.graveyard.length
-    ? player.graveyard.map(graveCardHtml).join("")
+    ? player.graveyard.map((card) => graveCardHtml(card, { showType: showGraveTypes })).join("")
     : '<span class="muted-small">墓地にカードはありません</span>';
 
   return `<section class="player ${active ? "active" : ""}">
@@ -693,7 +696,7 @@ function centerDisplay(validation) {
     const preview = defenseCards.length
       ? `<div class="equation defense-preview">防御候補 ${defenseCards.map((card) => card.number).join(" + ")} = ${defenseValue} ／ 予想ダメージ ${Math.max(0, game.attack.value - defenseValue)}</div>`
       : '<div class="equation">防御カードを1〜2枚選ぶか、外部ゾーンを使います</div>';
-    return `<div><div class="prime-number">${game.attack.value}</div><div class="equation">攻撃：基本 ${game.attack.base} + B効果 ${game.attack.bCount}</div>${preview}</div>`;
+    return `<div><div class="prime-number">${game.attack.value}</div><div class="equation">確定した攻撃値</div>${preview}</div>`;
   }
   if (game.lastResult) {
     return `<div><div class="prime-number">${game.lastResult.damage}</div><div class="equation">攻撃 ${game.lastResult.attack} − 防御 ${game.lastResult.defense}</div><div class="equation result-moved">ライフ移動：${game.lastResult.moved.join(", ") || "なし"}</div></div>`;
