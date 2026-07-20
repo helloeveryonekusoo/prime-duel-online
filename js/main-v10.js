@@ -10,11 +10,11 @@ import {
   shouldOfferPassDraw,
   validateAttack,
   clearSave,
-} from "./game.js?v=14-ui-fixes";
+} from "./game.js?v=16-rematch";
 
 const MQTT_MODULE_URL = "https://esm.run/mqtt@5.15.2";
 const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
-const TOPIC_ROOT = "prime-duel-online/v14";
+const TOPIC_ROOT = "prime-duel-online/v16";
 const AUTO_TURN_DELAY = 1_500;
 const META_HEARTBEAT_INTERVAL = 15_000;
 const META_STALE_AFTER = 45_000;
@@ -77,7 +77,7 @@ function graveCardHtml(card) {
 
 function title() {
   app.innerHTML = `<section class="hero"><div class="hero-card">
-    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v15</p>
+    <p class="eyebrow">ONLINE PRIME CARD GAME · DIRECT MQTT v16</p>
     <h1>PRIME<br>DUEL</h1>
     <p class="sub">ルームコードでつながる、2人用オンラインカードゲーム。<br>対戦への参加だけでなく、進行中のゲームも観戦できます。</p>
     <div class="form-row">
@@ -284,6 +284,11 @@ function receiveMeta(message) {
 function receiveEvent(message) {
   if (message.targetId && message.targetId !== clientId) return;
 
+  if (message.type === "rematch-ready") {
+    receiveRematchReady(message);
+    return;
+  }
+
   if (message.type === "join" && isHost) {
     if (message.role === "spectator") {
       if (game) sync();
@@ -355,6 +360,51 @@ function publishMeta(status) {
 function startHeartbeat() {
   clearInterval(heartbeatTimer);
   heartbeatTimer = setInterval(() => publishMeta(game ? "playing" : "waiting"), META_HEARTBEAT_INTERVAL);
+}
+
+function receiveRematchReady(message) {
+  if (!game || game.phase !== PHASES.GAME_OVER) return;
+  const readyIndex = message.role === "host" ? 0 : message.role === "player" ? 1 : null;
+  if (readyIndex === null) return;
+  if (isHost && (readyIndex !== 1 || message.senderId !== opponentClientId)) return;
+  if (myRole === "player" && (readyIndex !== 0 || message.senderId !== hostClientId)) return;
+
+  game.rematchReady ??= [false, false];
+  game.rematchReady[readyIndex] = true;
+  gameOver();
+
+  if (isHost) {
+    if (game.rematchReady.every(Boolean)) startRematch();
+    else sync();
+  }
+}
+
+function requestRematch() {
+  if (!game || game.phase !== PHASES.GAME_OVER || myIndex === null) return;
+  game.rematchReady ??= [false, false];
+  if (game.rematchReady[myIndex]) return;
+  game.rematchReady[myIndex] = true;
+  publishEvent({ type: "rematch-ready" });
+  gameOver();
+
+  if (isHost) {
+    if (game.rematchReady.every(Boolean)) startRematch();
+    else sync();
+  }
+}
+
+function startRematch() {
+  if (!isHost || !game || game.phase !== PHASES.GAME_OVER) return;
+  const names = game.players.map((player) => player.name);
+  game = createGame(names);
+  startTurn(game);
+  selected = [];
+  order = [];
+  openGraveyards.clear();
+  modalRoot.innerHTML = "";
+  publishMeta("playing");
+  render();
+  sync();
 }
 
 function receiveState(state) {
@@ -753,11 +803,28 @@ function passDrawModal() {
 function gameOver() {
   clearSave();
   const winner = game.players[game.winner];
+  const ready = game.rematchReady || [false, false];
+  const myReady = myIndex !== null && ready[myIndex];
+  const opponentReady = myIndex !== null && ready[1 - myIndex];
+  const rematchStatus = myRole === "spectator"
+    ? "プレイヤーが再戦を選ぶと、同じルームで次の対戦が始まります。"
+    : myReady
+      ? opponentReady
+        ? "再戦を開始します…"
+        : "相手の再戦準備を待っています…"
+      : opponentReady
+        ? "相手が再戦を希望しています。"
+        : "両プレイヤーが再戦を選ぶと、同じルームで続けられます。";
   modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal">
     <p class="eyebrow">GAME OVER</p><h1>${esc(winner.name)}<br>WIN</h1>
     <p class="sub">相手のライフゾーンをすべて攻略しました。</p>
-    <button type="button" class="btn primary" id="back-title">タイトルへ</button>
+    <p class="hint rematch-status">${rematchStatus}</p>
+    <div class="footer-actions">
+      ${myRole === "spectator" ? "" : `<button type="button" class="btn primary" id="rematch" ${myReady ? "disabled" : ""}>${myReady ? "再戦準備完了" : "同じ相手と再戦"}</button>`}
+      <button type="button" class="btn" id="back-title">タイトルへ</button>
+    </div>
   </div></div>`;
+  document.querySelector("#rematch")?.addEventListener("click", requestRematch);
   document.querySelector("#back-title").addEventListener("click", () => {
     leaveNetwork();
     game = null;
